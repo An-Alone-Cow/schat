@@ -1,36 +1,63 @@
 #include <iostream>
+#include <sstream>
 #include <SFML/Network.hpp>
+#include "messages.pb.h"
 
 const unsigned short PORT = 5000;
-const std::string IPADDRESS("192.168.0.100");//change to suit your needs
+const std::string IPADDRESS("127.0.0.1");
 
+std::string name;
 std::string msgSend;
+bool new_message = false;
 
 sf::TcpSocket socket;
 sf::Mutex globalMutex;
 bool quit = false;
 
-void DoStuff(void)
+void Sender(void)
 {
-    static std::string oldMsg;
     while(!quit)
     {
         sf::Packet packetSend;
+        bool send = false;
         globalMutex.lock();
-        packetSend << msgSend;
+        if(new_message)
+        {
+            new_message = false;
+            send = true;
+
+            Message msg;
+            msg.set_name(name);
+            msg.set_chat_message(msgSend);
+
+            std::stringstream stream;
+            msg.SerializeToOstream(&stream);
+
+            packetSend << stream.str();
+        }
         globalMutex.unlock();
 
-        socket.send(packetSend);
+        if(send)
+            socket.send(packetSend);
+    }
+}
 
-        std::string msg;
+void Receiver(void)
+{
+    while(!quit)
+    {
+        std::string msgStr;
         sf::Packet packetReceive;
 
         socket.receive(packetReceive);
-        if ((packetReceive >> msg) && oldMsg != msg && !msg.empty())
+        if (packetReceive >> msgStr)
         {
-            std::cout << msg << std::endl;
-            oldMsg = msg;
+            Message msg;
+            msg.ParseFromString(msgStr);
+
+            std::cout << msg.name() << ": " << msg.chat_message() << std::endl;
         }
+
     }
 }
 
@@ -55,19 +82,21 @@ bool Client(void)
 void GetInput(void)
 {
     std::string s;
-    std::cout << "\nEnter \"exit\" to quit or message to send: ";
     getline(std::cin,s);
-    if(s == "exit")
-        quit = true;
+
     globalMutex.lock();
     msgSend = s;
+    new_message = true;
     globalMutex.unlock();
 }
 
 
 int main(int argc, char* argv[])
 {
-    sf::Thread* thread = 0;
+    std::cout << "Enter name: ";
+    std::cin >> name;
+
+    sf::Thread* receiver_thread = 0,* sender_thread = 0;
 
     char who;
     std::cout << "Do you want to be a server (s) or a client (c) ? ";
@@ -78,18 +107,26 @@ int main(int argc, char* argv[])
     else
         Client();
 
-    thread = new sf::Thread(&DoStuff);
-    thread->launch();
+    receiver_thread = new sf::Thread(&Receiver);
+    sender_thread = new sf::Thread(&Sender);
+    receiver_thread->launch();
+    sender_thread->launch();
 
     while(!quit)
     {
         GetInput();
     }
 
-    if(thread)
+    if(sender_thread)
     {
-        thread->wait();
-        delete thread;
+        sender_thread->wait();
+        delete sender_thread;
+    }
+
+    if(receiver_thread)
+    {
+        receiver_thread->wait();
+        delete receiver_thread;
     }
     return 0;
 }
